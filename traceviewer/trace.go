@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package main
+package traceviewer
 
 import (
 	"encoding/json"
@@ -13,24 +13,44 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/hyangah/tracer/trace" // copy of go/src/internal/trace
 )
 
-func init() {
-	http.HandleFunc("/trace", httpTrace)
-	http.HandleFunc("/jsontrace", httpJsonTrace)
-	http.HandleFunc("/trace_viewer_html", httpTraceViewerHTML)
+var (
+	initOnce    sync.Once
+	traceEvents []*trace.Event
+	gs map[uint64]*trace.GDesc
+	ranges []Range
+)
+
+func Init(events []*trace.Event, goroutines map[uint64]*trace.GDesc) []Range {
+	initOnce.Do(func() {
+		traceEvents = events
+		gs = goroutines
+
+		log.Printf("Serializing trace...")
+		data := generateTrace(&traceParams{
+			events:traceEvents,
+			endTime: int64(1<<63 - 1),
+		})
+
+		log.Printf("Splitting trace...")
+		ranges = splitTrace(data)
+
+		http.HandleFunc("/trace", httpTrace)
+		http.HandleFunc("/jsontrace", httpJsonTrace)
+		http.HandleFunc("/trace_viewer_html", httpTraceViewerHTML)
+	})
+	r := make([]Range, len(ranges))
+	copy(r, ranges)
+	return r
 }
 
 // httpTrace serves either whole trace (goid==0) or trace for goid goroutine.
 func httpTrace(w http.ResponseWriter, r *http.Request) {
-	_, err := parseEvents()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -134,14 +154,8 @@ func httpTraceViewerHTML(w http.ResponseWriter, r *http.Request) {
 // httpJsonTrace serves json trace, requested from within templTrace HTML.
 func httpJsonTrace(w http.ResponseWriter, r *http.Request) {
 	// This is an AJAX handler, so instead of http.Error we use log.Printf to log errors.
-	events, err := parseEvents()
-	if err != nil {
-		log.Printf("failed to parse trace: %v", err)
-		return
-	}
-
 	params := &traceParams{
-		events:  events,
+		events:  traceEvents,
 		endTime: int64(1<<63 - 1),
 	}
 
@@ -152,13 +166,12 @@ func httpJsonTrace(w http.ResponseWriter, r *http.Request) {
 			log.Printf("failed to parse goid parameter '%v': %v", goids, err)
 			return
 		}
-		analyzeGoroutines(events)
 		g := gs[goid]
 		params.gtrace = true
 		params.startTime = g.StartTime
 		params.endTime = g.EndTime
 		params.maing = goid
-		params.gs = trace.RelatedGoroutines(events, goid)
+		params.gs = trace.RelatedGoroutines(traceEvents, goid)
 	}
 
 	data := generateTrace(params)
@@ -181,8 +194,7 @@ func httpJsonTrace(w http.ResponseWriter, r *http.Request) {
 		}
 		data.Events = append(data.Events[start:end], data.Events[data.footer:]...)
 	}
-	err = json.NewEncoder(w).Encode(data)
-	if err != nil {
+	if err := json.NewEncoder(w).Encode(data); err != nil {
 		log.Printf("failed to serialize trace: %v", err)
 		return
 	}

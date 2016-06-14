@@ -4,7 +4,7 @@
 
 // Goroutine-related profiles.
 
-package main
+package analysis
 
 import (
 	"fmt"
@@ -12,15 +12,9 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
-	"sync"
 
-	"github.com/hyangah/tracer/trace"  // copy of go/src/internal/trace
+	"github.com/hyangah/tracer/trace" // copy of go/src/internal/trace
 )
-
-func init() {
-	http.HandleFunc("/goroutines", httpGoroutines)
-	http.HandleFunc("/goroutine", httpGoroutine)
-}
 
 // gtype describes a group of goroutines grouped by start PC.
 type gtype struct {
@@ -58,26 +52,8 @@ func (l gdescList) Swap(i, j int) {
 	l[i], l[j] = l[j], l[i]
 }
 
-var (
-	gsInit sync.Once
-	gs     map[uint64]*trace.GDesc
-)
-
-// analyzeGoroutines generates statistics about execution of all goroutines and stores them in gs.
-func analyzeGoroutines(events []*trace.Event) {
-	gsInit.Do(func() {
-		gs = trace.GoroutineStats(events)
-	})
-}
-
 // httpGoroutines serves list of goroutine groups.
 func httpGoroutines(w http.ResponseWriter, r *http.Request) {
-	events, err := parseEvents()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	analyzeGoroutines(events)
 	gss := make(map[uint64]gtype)
 	for _, g := range gs {
 		gs1 := gss[g.PC]
@@ -109,17 +85,11 @@ Goroutines: <br>
 
 // httpGoroutine serves list of goroutines in a particular group.
 func httpGoroutine(w http.ResponseWriter, r *http.Request) {
-	events, err := parseEvents()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
 	pc, err := strconv.ParseUint(r.FormValue("id"), 10, 64)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("failed to parse id parameter '%v': %v", r.FormValue("id"), err), http.StatusInternalServerError)
 		return
 	}
-	analyzeGoroutines(events)
 	var glist gdescList
 	for _, g := range gs {
 		if g.PC != pc || g.ExecTime == 0 {

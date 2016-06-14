@@ -4,7 +4,7 @@
 
 // Serving of pprof-like profiles.
 
-package main
+package analysis
 
 import (
 	"bufio"
@@ -14,19 +14,12 @@ import (
 	"os"
 	"os/exec"
 
-	"github.com/hyangah/tracer/trace"  // copy of go/src/internal/trace
 	"github.com/hyangah/tracer/pprof/profile" // copy of cmd/internal/pprof/profile
+	"github.com/hyangah/tracer/trace"         // copy of go/src/internal/trace
 )
 
-func init() {
-	http.HandleFunc("/io", httpIO)
-	http.HandleFunc("/block", httpBlock)
-	http.HandleFunc("/syscall", httpSyscall)
-	http.HandleFunc("/sched", httpSched)
-}
-
-// Record represents one entry in pprof-like profiles.
-type Record struct {
+// record represents one entry in pprof-like profiles.
+type record struct {
 	stk  []*trace.Frame
 	n    uint64
 	time int64
@@ -34,12 +27,8 @@ type Record struct {
 
 // httpIO serves IO pprof-like profile (time spent in IO wait).
 func httpIO(w http.ResponseWriter, r *http.Request) {
-	events, err := parseEvents()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	prof := make(map[uint64]Record)
+	events := traceEvents
+	prof := make(map[uint64]record)
 	for _, ev := range events {
 		if ev.Type != trace.EvGoBlockNet || ev.Link == nil || ev.StkID == 0 || len(ev.Stk) == 0 {
 			continue
@@ -55,12 +44,8 @@ func httpIO(w http.ResponseWriter, r *http.Request) {
 
 // httpBlock serves blocking pprof-like profile (time spent blocked on synchronization primitives).
 func httpBlock(w http.ResponseWriter, r *http.Request) {
-	events, err := parseEvents()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	prof := make(map[uint64]Record)
+	events := traceEvents
+	prof := make(map[uint64]record)
 	for _, ev := range events {
 		switch ev.Type {
 		case trace.EvGoBlockSend, trace.EvGoBlockRecv, trace.EvGoBlockSelect,
@@ -82,12 +67,8 @@ func httpBlock(w http.ResponseWriter, r *http.Request) {
 
 // httpSyscall serves syscall pprof-like profile (time spent blocked in syscalls).
 func httpSyscall(w http.ResponseWriter, r *http.Request) {
-	events, err := parseEvents()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	prof := make(map[uint64]Record)
+	events := traceEvents
+	prof := make(map[uint64]record)
 	for _, ev := range events {
 		if ev.Type != trace.EvGoSysCall || ev.Link == nil || ev.StkID == 0 || len(ev.Stk) == 0 {
 			continue
@@ -104,12 +85,8 @@ func httpSyscall(w http.ResponseWriter, r *http.Request) {
 // httpSched serves scheduler latency pprof-like profile
 // (time between a goroutine become runnable and actually scheduled for execution).
 func httpSched(w http.ResponseWriter, r *http.Request) {
-	events, err := parseEvents()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	prof := make(map[uint64]Record)
+	events := traceEvents
+	prof := make(map[uint64]record)
 	for _, ev := range events {
 		if (ev.Type != trace.EvGoUnblock && ev.Type != trace.EvGoCreate) ||
 			ev.Link == nil || ev.StkID == 0 || len(ev.Stk) == 0 {
@@ -125,7 +102,7 @@ func httpSched(w http.ResponseWriter, r *http.Request) {
 }
 
 // generateSVGProfile generates pprof-like profile stored in prof and writes in to w.
-func serveSVGProfile(w http.ResponseWriter, r *http.Request, prof map[uint64]Record) {
+func serveSVGProfile(w http.ResponseWriter, r *http.Request, prof map[uint64]record) {
 	if len(prof) == 0 {
 		http.Error(w, "The profile is empty", http.StatusNotFound)
 		return
@@ -162,7 +139,7 @@ func serveSVGProfile(w http.ResponseWriter, r *http.Request, prof map[uint64]Rec
 	http.ServeFile(w, r, svgFilename)
 }
 
-func buildProfile(prof map[uint64]Record) *profile.Profile {
+func buildProfile(prof map[uint64]record) *profile.Profile {
 	p := &profile.Profile{
 		PeriodType: &profile.ValueType{Type: "trace", Unit: "count"},
 		Period:     1,

@@ -31,7 +31,9 @@ import (
 	"runtime"
 	"sync"
 
-	"github.com/hyangah/tracer/trace"  // copy of go/src/internal/trace
+	"github.com/hyangah/tracer/analysis"
+	"github.com/hyangah/tracer/trace" // copy of go/src/internal/trace
+	"github.com/hyangah/tracer/traceviewer"
 )
 
 const usageMessage = "" +
@@ -54,6 +56,7 @@ var (
 	// The binary file name, left here for serveSVGProfile.
 	programBinary string
 	traceFile     string
+	ranges        []traceviewer.Range
 )
 
 func main() {
@@ -75,26 +78,21 @@ func main() {
 		flag.Usage()
 	}
 
-	ln, err := net.Listen("tcp", *httpFlag)
-	if err != nil {
-		dief("failed to create server socket: %v\n", err)
-	}
-
 	log.Printf("Parsing trace...")
 	events, err := parseEvents()
 	if err != nil {
 		dief("%v\n", err)
 	}
+	goroutines := trace.GoroutineStats(events)
 
-	log.Printf("Serializing trace...")
-	params := &traceParams{
-		events:  events,
-		endTime: int64(1<<63 - 1),
+	ranges = traceviewer.Init(events, goroutines)
+
+	analysis.Init(events, goroutines)
+
+	ln, err := net.Listen("tcp", *httpFlag)
+	if err != nil {
+		dief("failed to create server socket: %v\n", err)
 	}
-	data := generateTrace(params)
-
-	log.Printf("Splitting trace...")
-	ranges = splitTrace(data)
 
 	log.Printf("Opening browser")
 	if !startBrowser("http://" + ln.Addr().String()) {
@@ -106,8 +104,6 @@ func main() {
 	err = http.Serve(ln, nil)
 	dief("failed to start http server: %v\n", err)
 }
-
-var ranges []Range
 
 var loader struct {
 	once   sync.Once
