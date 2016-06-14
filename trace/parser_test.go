@@ -25,7 +25,7 @@ func TestCorruptedInputs(t *testing.T) {
 		"go 1.5 trace\x00\x00\x00\x00\xc3\x0200",
 	}
 	for _, data := range tests {
-		events, err := Parse(strings.NewReader(data), "")
+		events, err := Parse(strings.NewReader(data), Addr2LineSymbolizer(""))
 		if err == nil || events != nil {
 			t.Fatalf("no error on input: %q", data)
 		}
@@ -42,7 +42,7 @@ func TestParseCanned(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to read input file: %v", err)
 		}
-		_, err = Parse(bytes.NewReader(data), "")
+		_, err = Parse(bytes.NewReader(data), nil)
 		switch {
 		case strings.HasSuffix(f.Name(), "_good"):
 			if err != nil {
@@ -94,7 +94,7 @@ func TestTimestampOverflow(t *testing.T) {
 	for ts := uint64(1); ts < 1e16; ts *= 2 {
 		w.emit(EvGoCreate, ts, ts, 0, 0)
 	}
-	if _, err := Parse(w, ""); err != nil {
+	if _, err := Parse(w, nil); err != nil {
 		t.Fatalf("failed to parse: %v", err)
 	}
 }

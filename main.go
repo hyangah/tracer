@@ -40,7 +40,7 @@ Given a trace file produced by 'go test':
 	go test -trace=trace.out pkg
 
 Open a web browser displaying trace:
-	go tool trace [flags] [pkg.test] trace.out
+	tracer [flags] [pkg.test] trace.out
 [pkg.test] argument is required for traces produced by Go 1.6 and below.
 Go 1.7 does not require the binary argument.
 
@@ -125,7 +125,7 @@ func parseEvents() ([]*trace.Event, error) {
 		defer tracef.Close()
 
 		// Parse and symbolize.
-		events, err := trace.Parse(bufio.NewReader(tracef), programBinary)
+		events, err := trace.Parse(bufio.NewReader(tracef), trace.Addr2LineSymbolizer(programBinary))
 		if err != nil {
 			loader.err = fmt.Errorf("failed to parse trace: %v", err)
 			return

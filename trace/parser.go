@@ -64,7 +64,7 @@ type Symbolizer interface {
 }
 
 // Parse parses, post-processes and verifies the trace.
-func Parse(r io.Reader, bin string) ([]*Event, error) {
+func Parse(r io.Reader, symbolizer Symbolizer) ([]*Event, error) {
 	ver, rawEvents, strings, err := readTrace(r)
 	if err != nil {
 		return nil, err
@@ -87,8 +87,8 @@ func Parse(r io.Reader, bin string) ([]*Event, error) {
 			ev.Stk = stacks[ev.StkID]
 		}
 	}
-	if ver < 1007 && bin != "" {
-		if err := symbolize(events, bin); err != nil {
+	if ver < 1007 && symbolizer != nil {
+		if err := symbolize(events, symbolizer); err != nil {
 			return nil, err
 		}
 	}
@@ -700,6 +700,9 @@ func Addr2LineSymbolizer(bin string) Symbolizer {
 type addr2LineSymbolizer string
 
 func (s addr2LineSymbolizer) Symbolize(pcs []uint64) (map[uint64]*Frame, error) {
+	if len(s) == 0 {
+		return nil, fmt.Errorf("no binary name was specified")
+	}
 	cmd := exec.Command("go", "tool", "addr2line", string(s))
 	in, err := cmd.StdinPipe()
 	if err != nil {
@@ -755,7 +758,7 @@ func (s addr2LineSymbolizer) Symbolize(pcs []uint64) (map[uint64]*Frame, error) 
 
 
 // symbolize attaches func/file/line info to stack traces.
-func symbolize(events []*Event, bin string) error {
+func symbolize(events []*Event, s Symbolizer) error {
 	// First, collect and dedup all pcs.
 	pcsSet := make(map[uint64]bool)
 	for _, ev := range events {
@@ -768,7 +771,6 @@ func symbolize(events []*Event, bin string) error {
 		pcsList = append(pcsList, pc)
 	}
 
-	s := Addr2LineSymbolizer(bin)
 	pcs, err := s.Symbolize(pcsList)
 	if err != nil {
 		return err
