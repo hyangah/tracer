@@ -58,6 +58,11 @@ const (
 	SyscallP // depicts returns from syscalls
 )
 
+type Symbolizer interface {
+	// Symbolize returns the frame information for given PCs.
+	Symbolize(pcs []uint64) (map[uint64]*Frame, error)
+}
+
 // Parse parses, post-processes and verifies the trace.
 func Parse(r io.Reader, bin string) ([]*Event, error) {
 	ver, rawEvents, strings, err := readTrace(r)
@@ -686,54 +691,52 @@ func postProcessTrace(ver int, events []*Event) error {
 	return nil
 }
 
-// symbolize attaches func/file/line info to stack traces.
-func symbolize(events []*Event, bin string) error {
-	// First, collect and dedup all pcs.
-	pcs := make(map[uint64]*Frame)
-	for _, ev := range events {
-		for _, f := range ev.Stk {
-			pcs[f.PC] = nil
-		}
-	}
+// Addr2LineSymbolizer returns a Symbolizer that symbolizes by running the
+// 'go tool addr2line' command on the given binary.
+func Addr2LineSymbolizer(bin string) Symbolizer {
+	return addr2LineSymbolizer(bin)
+}
 
-	// Start addr2line.
-	cmd := exec.Command("go", "tool", "addr2line", bin)
+type addr2LineSymbolizer string
+
+func (s addr2LineSymbolizer) Symbolize(pcs []uint64) (map[uint64]*Frame, error) {
+	cmd := exec.Command("go", "tool", "addr2line", string(s))
 	in, err := cmd.StdinPipe()
 	if err != nil {
-		return fmt.Errorf("failed to pipe addr2line stdin: %v", err)
+		return nil, fmt.Errorf("failed to pipe addr2line stdin: %v", err)
 	}
+
 	cmd.Stderr = os.Stderr
 	out, err := cmd.StdoutPipe()
 	if err != nil {
-		return fmt.Errorf("failed to pipe addr2line stdout: %v", err)
+		return nil, fmt.Errorf("failed to pipe addr2line stdout: %v", err)
 	}
-	err = cmd.Start()
-	if err != nil {
-		return fmt.Errorf("failed to start addr2line: %v", err)
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("failed to start addr2line: %v", err)
 	}
+	defer cmd.Wait()
+
 	outb := bufio.NewReader(out)
 
 	// Write all pcs to addr2line.
 	// Need to copy pcs to an array, because map iteration order is non-deterministic.
-	var pcArray []uint64
-	for pc := range pcs {
-		pcArray = append(pcArray, pc)
-		_, err := fmt.Fprintf(in, "0x%x\n", pc-1)
-		if err != nil {
-			return fmt.Errorf("failed to write to addr2line: %v", err)
+	for _, pc := range pcs {
+		if _, err := fmt.Fprintf(in, "0x%x\n", pc-1); err != nil {
+			return nil, fmt.Errorf("failed to write to addr2line: %v", err)
 		}
 	}
 	in.Close()
 
 	// Read in answers.
-	for _, pc := range pcArray {
+	ret := make(map[uint64]*Frame)
+	for _, pc := range pcs {
 		fn, err := outb.ReadString('\n')
 		if err != nil {
-			return fmt.Errorf("failed to read from addr2line: %v", err)
+			return nil, fmt.Errorf("failed to read from addr2line: %v", err)
 		}
 		file, err := outb.ReadString('\n')
 		if err != nil {
-			return fmt.Errorf("failed to read from addr2line: %v", err)
+			return nil, fmt.Errorf("failed to read from addr2line: %v", err)
 		}
 		f := &Frame{PC: pc}
 		f.Fn = fn[:len(fn)-1]
@@ -745,9 +748,31 @@ func symbolize(events []*Event, bin string) error {
 				f.Line = ln
 			}
 		}
-		pcs[pc] = f
+		ret[pc] = f
 	}
-	cmd.Wait()
+	return ret, nil
+}
+
+
+// symbolize attaches func/file/line info to stack traces.
+func symbolize(events []*Event, bin string) error {
+	// First, collect and dedup all pcs.
+	pcsSet := make(map[uint64]bool)
+	for _, ev := range events {
+		for _, f := range ev.Stk {
+			pcsSet[f.PC] = true
+		}
+	}
+	pcsList := make([]uint64, 0, len(pcsSet))
+	for pc := range pcsSet {
+		pcsList = append(pcsList, pc)
+	}
+
+	s := Addr2LineSymbolizer(bin)
+	pcs, err := s.Symbolize(pcsList)
+	if err != nil {
+		return err
+	}
 
 	// Replace frames in events array.
 	for _, ev := range events {
