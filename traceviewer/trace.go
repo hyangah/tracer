@@ -4,13 +4,13 @@
 
 package traceviewer
 
+//go:generate go run pack.go
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
-	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -22,8 +22,8 @@ import (
 var (
 	initOnce    sync.Once
 	traceEvents []*trace.Event
-	gs map[uint64]*trace.GDesc
-	ranges []Range
+	gs          map[uint64]*trace.GDesc
+	ranges      []Range
 )
 
 func Init(events []*trace.Event, goroutines map[uint64]*trace.GDesc) []Range {
@@ -33,7 +33,7 @@ func Init(events []*trace.Event, goroutines map[uint64]*trace.GDesc) []Range {
 
 		log.Printf("Serializing trace...")
 		data := generateTrace(&traceParams{
-			events:traceEvents,
+			events:  traceEvents,
 			endTime: int64(1<<63 - 1),
 		})
 
@@ -57,7 +57,6 @@ func httpTrace(w http.ResponseWriter, r *http.Request) {
 	}
 	html := strings.Replace(templTrace, "{{PARAMS}}", r.Form.Encode(), -1)
 	w.Write([]byte(html))
-
 }
 
 // See https://github.com/catapult-project/catapult/blob/master/tracing/docs/embedding-trace-viewer.md
@@ -148,7 +147,10 @@ var templTrace = `
 // httpTraceViewerHTML serves static part of trace-viewer.
 // This URL is queried from templTrace HTML.
 func httpTraceViewerHTML(w http.ResponseWriter, r *http.Request) {
-	http.ServeFile(w, r, filepath.Join(runtime.GOROOT(), "misc", "trace", "trace_viewer_lean.html"))
+	_, err := io.Copy(w, strings.NewReader(traceViewerLeanHTML))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
 }
 
 // httpJsonTrace serves json trace, requested from within templTrace HTML.
