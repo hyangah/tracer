@@ -42,7 +42,7 @@ func TestParseCanned(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to read input file: %v", err)
 		}
-		_, err = Parse(bytes.NewReader(data), nil)
+		_, _, err = parse(bytes.NewReader(data), nil)
 		switch {
 		case strings.HasSuffix(f.Name(), "_good"):
 			if err != nil {

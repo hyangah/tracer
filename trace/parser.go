@@ -65,21 +65,34 @@ type Symbolizer interface {
 
 // Parse parses, post-processes and verifies the trace.
 func Parse(r io.Reader, symbolizer Symbolizer) ([]*Event, error) {
-	ver, rawEvents, strings, err := readTrace(r)
+	ver, events, err := parse(r, symbolizer)
 	if err != nil {
 		return nil, err
+	}
+	if ver < 1007 && symbolizer == nil {
+		return nil, fmt.Errorf("for traces produced by go 1.6 or below, the binary argument must be provided")
+	}
+	return events, nil
+}
+
+// parse parses, post-processes and verifies the trace. It returns the
+// trace version and the list of events.
+func parse(r io.Reader, symbolizer Symbolizer) (int, []*Event, error) {
+	ver, rawEvents, strings, err := readTrace(r)
+	if err != nil {
+		return 0, nil, err
 	}
 	events, stacks, err := parseEvents(ver, rawEvents, strings)
 	if err != nil {
-		return nil, err
+		return 0, nil, err
 	}
 	events, err = removeFutile(events)
 	if err != nil {
-		return nil, err
+		return 0, nil, err
 	}
 	err = postProcessTrace(ver, events)
 	if err != nil {
-		return nil, err
+		return 0, nil, err
 	}
 	// Attach stack traces.
 	for _, ev := range events {
@@ -89,10 +102,10 @@ func Parse(r io.Reader, symbolizer Symbolizer) ([]*Event, error) {
 	}
 	if ver < 1007 && symbolizer != nil {
 		if err := symbolize(events, symbolizer); err != nil {
-			return nil, err
+			return 0, nil, err
 		}
 	}
-	return events, nil
+	return ver, events, nil
 }
 
 // rawEvent is a helper type used during parsing.
