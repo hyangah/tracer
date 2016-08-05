@@ -9,6 +9,7 @@ package analysis
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"net/http"
 	"os"
@@ -25,8 +26,8 @@ type record struct {
 	time int64
 }
 
-// httpIO serves IO pprof-like profile (time spent in IO wait).
-func httpIO(w http.ResponseWriter, r *http.Request) {
+// IOProfile computes IO pprof-like profile (time spent in IO wait).
+func IOProfile(w io.Writer) error {
 	events := traceEvents
 	prof := make(map[uint64]record)
 	for _, ev := range events {
@@ -39,11 +40,11 @@ func httpIO(w http.ResponseWriter, r *http.Request) {
 		rec.time += ev.Link.Ts - ev.Ts
 		prof[ev.StkID] = rec
 	}
-	serveSVGProfile(w, r, prof)
+	return buildProfile(prof).Write(w)
 }
 
-// httpBlock serves blocking pprof-like profile (time spent blocked on synchronization primitives).
-func httpBlock(w http.ResponseWriter, r *http.Request) {
+// BlockProfile computes blocking pprof-like profile (time spent blocked on synchronization primitives).
+func BlockProfile(w io.Writer) error {
 	events := traceEvents
 	prof := make(map[uint64]record)
 	for _, ev := range events {
@@ -62,11 +63,11 @@ func httpBlock(w http.ResponseWriter, r *http.Request) {
 		rec.time += ev.Link.Ts - ev.Ts
 		prof[ev.StkID] = rec
 	}
-	serveSVGProfile(w, r, prof)
+	return buildProfile(prof).Write(w)
 }
 
-// httpSyscall serves syscall pprof-like profile (time spent blocked in syscalls).
-func httpSyscall(w http.ResponseWriter, r *http.Request) {
+// SyscallProfile computes syscall pprof-like profile (time spent blocked in syscalls).
+func SyscallProfile(w io.Writer) error {
 	events := traceEvents
 	prof := make(map[uint64]record)
 	for _, ev := range events {
@@ -79,12 +80,12 @@ func httpSyscall(w http.ResponseWriter, r *http.Request) {
 		rec.time += ev.Link.Ts - ev.Ts
 		prof[ev.StkID] = rec
 	}
-	serveSVGProfile(w, r, prof)
+	return buildProfile(prof).Write(w)
 }
 
-// httpSched serves scheduler latency pprof-like profile
+// ScheduleLatencyProfile serves scheduler latency pprof-like profile
 // (time between a goroutine become runnable and actually scheduled for execution).
-func httpSched(w http.ResponseWriter, r *http.Request) {
+func ScheduleLatencyProfile(w io.Writer) error {
 	events := traceEvents
 	prof := make(map[uint64]record)
 	for _, ev := range events {
@@ -98,45 +99,43 @@ func httpSched(w http.ResponseWriter, r *http.Request) {
 		rec.time += ev.Link.Ts - ev.Ts
 		prof[ev.StkID] = rec
 	}
-	serveSVGProfile(w, r, prof)
+	return buildProfile(prof).Write(w)
 }
 
-// generateSVGProfile generates pprof-like profile stored in prof and writes in to w.
-func serveSVGProfile(w http.ResponseWriter, r *http.Request, prof map[uint64]record) {
-	if len(prof) == 0 {
-		http.Error(w, "The profile is empty", http.StatusNotFound)
-		return
+// serveSVGProfile generates pprof-like profile stored in prof and writes in to w.
+func serveSVGProfile(prof func(w io.Writer) error) func(w http.ResponseWriter, r *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
+		blockf, err := ioutil.TempFile("", "block")
+		if err != nil {
+			http.Error(w, fmt.Sprintf("failed to create temp file: %v", err), http.StatusInternalServerError)
+			return
+		}
+		defer func() {
+			blockf.Close()
+			os.Remove(blockf.Name())
+		}()
+		blockb := bufio.NewWriter(blockf)
+		if err := prof(blockb); err != nil {
+			http.Error(w, fmt.Sprintf("failed to generate profile: %v", err), http.StatusInternalServerError)
+			return
+		}
+		if err := blockb.Flush(); err != nil {
+			http.Error(w, fmt.Sprintf("failed to flush temp file: %v", err), http.StatusInternalServerError)
+			return
+		}
+		if err := blockf.Close(); err != nil {
+			http.Error(w, fmt.Sprintf("failed to close temp file: %v", err), http.StatusInternalServerError)
+			return
+		}
+		svgFilename := blockf.Name() + ".svg"
+		if output, err := exec.Command("go", "tool", "pprof", "-svg", "-output", svgFilename, blockf.Name()).CombinedOutput(); err != nil {
+			http.Error(w, fmt.Sprintf("failed to execute go tool pprof: %v\n%s", err, output), http.StatusInternalServerError)
+			return
+		}
+		defer os.Remove(svgFilename)
+		w.Header().Set("Content-Type", "image/svg+xml")
+		http.ServeFile(w, r, svgFilename)
 	}
-	blockf, err := ioutil.TempFile("", "block")
-	if err != nil {
-		http.Error(w, fmt.Sprintf("failed to create temp file: %v", err), http.StatusInternalServerError)
-		return
-	}
-	defer func() {
-		blockf.Close()
-		os.Remove(blockf.Name())
-	}()
-	blockb := bufio.NewWriter(blockf)
-	if err := buildProfile(prof).Write(blockb); err != nil {
-		http.Error(w, fmt.Sprintf("failed to write profile: %v", err), http.StatusInternalServerError)
-		return
-	}
-	if err := blockb.Flush(); err != nil {
-		http.Error(w, fmt.Sprintf("failed to flush temp file: %v", err), http.StatusInternalServerError)
-		return
-	}
-	if err := blockf.Close(); err != nil {
-		http.Error(w, fmt.Sprintf("failed to close temp file: %v", err), http.StatusInternalServerError)
-		return
-	}
-	svgFilename := blockf.Name() + ".svg"
-	if output, err := exec.Command("go", "tool", "pprof", "-svg", "-output", svgFilename, blockf.Name()).CombinedOutput(); err != nil {
-		http.Error(w, fmt.Sprintf("failed to execute go tool pprof: %v\n%s", err, output), http.StatusInternalServerError)
-		return
-	}
-	defer os.Remove(svgFilename)
-	w.Header().Set("Content-Type", "image/svg+xml")
-	http.ServeFile(w, r, svgFilename)
 }
 
 func buildProfile(prof map[uint64]record) *profile.Profile {

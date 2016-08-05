@@ -32,6 +32,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"runtime"
+	"strings"
 	"sync"
 
 	"golang.org/x/exp/mmap"
@@ -94,7 +95,7 @@ func main() {
 
 	ranges = traceviewer.Init(events, goroutines)
 
-	analysis.Init(events, goroutines)
+	analysis.RegisterHTTPHandlers(events, goroutines)
 
 	ln, err := net.Listen("tcp", *httpFlag)
 	if err != nil {
@@ -243,6 +244,14 @@ func adhoc(events []*trace.Event, goroutines map[uint64]*trace.GDesc) {
 			continue
 		}
 
+		if handled, err := customCommand(in, events, goroutines); handled {
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "error: %s\n", err)
+			}
+			rl.Clear()
+			continue
+		}
+
 		if err := rl.Reindent(); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %s\n", err)
 			rl.Clear()
@@ -270,4 +279,41 @@ func adhoc(events []*trace.Event, goroutines map[uint64]*trace.GDesc) {
 		close(c)
 		rl.Accepted()
 	}
+}
+
+func customCommand(in string, events []*trace.Event, goroutines map[uint64]*trace.GDesc) (handled bool, err error) {
+	cmd := strings.Fields(strings.TrimSpace(in))
+	if len(cmd) == 0 {
+		return false, nil
+	}
+	switch cmd[0] {
+	case ":pprof":
+		subcmd := ""
+		if len(cmd) == 3 {
+			subcmd = cmd[1]
+		}
+		var pprof func(w io.Writer) error
+		switch subcmd {
+		default:
+			return true, fmt.Errorf("usage: :pprof [io|block|sched|syscall] output_fname")
+		case "io":
+			pprof = analysis.IOProfile
+		case "block":
+			pprof = analysis.BlockProfile
+		case "sched":
+			pprof = analysis.ScheduleLatencyProfile
+		case "syscall":
+			pprof = analysis.SyscallProfile
+		}
+		f, err := os.OpenFile(cmd[2], os.O_RDWR|os.O_CREATE, 0777)
+		if err != nil {
+			return true, fmt.Errorf("failed to open output file: %v", err)
+		}
+		if err := pprof(f); err != nil {
+			f.Close()
+			return true, err
+		}
+		return true, f.Close()
+	}
+	return false, nil
 }
