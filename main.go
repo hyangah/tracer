@@ -23,14 +23,21 @@ import (
 	"flag"
 	"fmt"
 	"html/template"
+	"io"
+	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"runtime"
 	"sync"
 
+	"golang.org/x/exp/mmap"
+
+	"github.com/hyangah/gore/session"
+	"github.com/hyangah/tracer/adhoc/shared"
 	"github.com/hyangah/tracer/analysis"
 	"github.com/hyangah/tracer/trace" // copy of go/src/internal/trace
 	"github.com/hyangah/tracer/traceviewer"
@@ -94,15 +101,20 @@ func main() {
 		dief("failed to create server socket: %v\n", err)
 	}
 
-	log.Printf("Opening browser")
+	log.Printf("Opening browser: http://%v", ln.Addr().String())
 	if !startBrowser("http://" + ln.Addr().String()) {
 		fmt.Fprintf(os.Stderr, "Trace viewer is listening on http://%s\n", ln.Addr().String())
 	}
 
 	// Start http server.
 	http.HandleFunc("/", httpMain)
-	err = http.Serve(ln, nil)
-	dief("failed to start http server: %v\n", err)
+
+	go func() {
+		err = http.Serve(ln, nil)
+		dief("failed to start http server: %v\n", err)
+	}()
+
+	adhoc(events, goroutines)
 }
 
 var loader struct {
@@ -180,4 +192,82 @@ func startBrowser(url string) bool {
 func dief(msg string, args ...interface{}) {
 	fmt.Fprintf(os.Stderr, msg, args...)
 	os.Exit(1)
+}
+
+func adhoc(events []*trace.Event, goroutines map[uint64]*trace.GDesc) {
+	f, _ := ioutil.TempFile("", "mmap")
+	name := f.Name()
+	defer os.RemoveAll(name)
+
+	w := bufio.NewWriter(f)
+	if err := shared.Marshal(w, events, goroutines); err != nil {
+		log.Fatal(err)
+	}
+	w.Flush()
+	f.Close()
+
+	r, err := mmap.Open(name)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer r.Close()
+
+	os.Setenv("TRACER_ADHOC_TRACE", name)
+
+	s, err := session.NewSession()
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(":help for help")
+
+	s.SetAutoImports(true)
+	if err := s.IncludePackage("github.com/hyangah/tracer/adhoc/traceloader"); err != nil {
+		log.Fatal(err)
+	}
+	rl := session.NewContLiner()
+	defer func() { rl.Close() }()
+
+	rl.SetWordCompleter(s.CompleteWord)
+
+	for {
+		in, err := rl.Prompt()
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			fmt.Fprintf(os.Stderr, "fatal: %s", err)
+			os.Exit(1)
+		}
+
+		if in == "" {
+			continue
+		}
+
+		if err := rl.Reindent(); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %s\n", err)
+			rl.Clear()
+			continue
+		}
+
+		c := make(chan os.Signal, 1)
+		go func() { <-c }()
+		signal.Notify(c, os.Interrupt)
+
+		err = s.Eval(in)
+		if err != nil {
+			if err == session.ErrContinue {
+				signal.Stop(c)
+				close(c)
+				continue
+			} else if err == session.ErrQuit {
+				signal.Stop(c)
+				close(c)
+				break
+			}
+			fmt.Println(err)
+		}
+		signal.Stop(c)
+		close(c)
+		rl.Accepted()
+	}
 }

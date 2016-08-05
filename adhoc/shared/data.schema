@@ -1,0 +1,41 @@
+struct Header {
+	Events int64
+	Frames int64
+	GDescs int64
+}
+
+struct Event {
+	Type	byte
+	Ts	int64
+	P	vint32
+	G	uint64
+	StkID	uint64
+	Stk	[]vint64
+	Args	[3]uint64
+	Link	vint64
+	Off	vint32
+}
+
+struct Frame {
+	PC	uint64
+	Fn	string
+	File	string
+	Line	int64
+}
+
+struct GDesc {
+	ID	uint64
+	Name	string
+	PC	uint64
+	CreationTime	int64
+	StartTime	int64
+	EndTime		int64
+	ExecTime	int64
+	SchedWaitTime	int64
+	IOTime		int64
+	BlockTime	int64
+	SyscallTime	int64
+	GCTime		int64
+	SweepTime	int64
+	TotalTime	int64
+}

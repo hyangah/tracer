@@ -5,6 +5,7 @@
 package trace
 
 import (
+	"log"
 	"bufio"
 	"bytes"
 	"fmt"
@@ -78,22 +79,27 @@ func Parse(r io.Reader, symbolizer Symbolizer) ([]*Event, error) {
 // parse parses, post-processes and verifies the trace. It returns the
 // trace version and the list of events.
 func parse(r io.Reader, symbolizer Symbolizer) (int, []*Event, error) {
+	log.Print("readTrace")
 	ver, rawEvents, strings, err := readTrace(r)
 	if err != nil {
 		return 0, nil, err
 	}
+	log.Print("parseEvents")
 	events, stacks, err := parseEvents(ver, rawEvents, strings)
 	if err != nil {
 		return 0, nil, err
 	}
+	log.Print("removeFutile")
 	events, err = removeFutile(events)
 	if err != nil {
 		return 0, nil, err
 	}
+	log.Print("postProcessTrace")
 	err = postProcessTrace(ver, events)
 	if err != nil {
 		return 0, nil, err
 	}
+	log.Print("attach stack traces")
 	// Attach stack traces.
 	for _, ev := range events {
 		if ev.StkID != 0 {
@@ -105,6 +111,7 @@ func parse(r io.Reader, symbolizer Symbolizer) (int, []*Event, error) {
 			return 0, nil, err
 		}
 	}
+	log.Print("parse done")
 	return ver, events, nil
 }
 
