@@ -1,8 +1,9 @@
-package traceloader
+package adhoc
 
 import (
 	"bufio"
 	"os"
+	"sync"
 
 	"golang.org/x/exp/mmap"
 
@@ -11,8 +12,9 @@ import (
 )
 
 var (
-	Events     []*trace.Event
-	Goroutines map[uint64]*trace.GDesc
+	once          sync.Once
+	allEvents     []*trace.Event
+	allGoroutines map[uint64]*trace.GDesc
 )
 
 type reader struct {
@@ -26,7 +28,17 @@ func (r *reader) Read(b []byte) (n int, err error) {
 	return n, err
 }
 
-func init() {
+func AllEvents() []*trace.Event {
+	once.Do(prep)
+	return allEvents
+}
+
+func AllGoroutines() map[uint64]*trace.GDesc {
+	once.Do(prep)
+	return allGoroutines
+}
+
+func prep() {
 	fname := os.Getenv("TRACER_ADHOC_TRACE")
 	if fname == "" {
 		panic("TRACER_ADHOC_TRACE must be set")
@@ -38,7 +50,7 @@ func init() {
 	}
 	defer f.Close()
 
-	Events, Goroutines, err = shared.Unmarshal(bufio.NewReader(&reader{mr:f}))
+	allEvents, allGoroutines, err = shared.Unmarshal(bufio.NewReader(&reader{mr: f}))
 	if err != nil {
 		panic("invalid TRACER_ADHOC_TRACE: " + err.Error())
 	}

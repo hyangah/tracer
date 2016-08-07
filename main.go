@@ -32,6 +32,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -215,16 +216,15 @@ func adhoc(events []*trace.Event, goroutines map[uint64]*trace.GDesc) {
 
 	os.Setenv("TRACER_ADHOC_TRACE", name)
 
-	s, err := session.NewSession()
-	if err != nil {
+	s := &session.Session{
+		AutoImports: true,
+		Pkg:         "github.com/hyangah/tracer/adhoc",
+	}
+	if err := s.Init(); err != nil {
 		log.Fatal(err)
 	}
 	fmt.Println(":help for help")
 
-	s.SetAutoImports(true)
-	if err := s.IncludePackage("github.com/hyangah/tracer/adhoc/traceloader"); err != nil {
-		log.Fatal(err)
-	}
 	rl := session.NewContLiner()
 	defer func() { rl.Close() }()
 
@@ -288,32 +288,52 @@ func customCommand(in string, events []*trace.Event, goroutines map[uint64]*trac
 	}
 	switch cmd[0] {
 	case ":pprof":
-		subcmd := ""
-		if len(cmd) == 3 {
-			subcmd = cmd[1]
-		}
-		var pprof func(w io.Writer) error
-		switch subcmd {
-		default:
-			return true, fmt.Errorf("usage: :pprof [io|block|sched|syscall] output_fname")
-		case "io":
-			pprof = analysis.IOProfile
-		case "block":
-			pprof = analysis.BlockProfile
-		case "sched":
-			pprof = analysis.ScheduleLatencyProfile
-		case "syscall":
-			pprof = analysis.SyscallProfile
-		}
-		f, err := os.OpenFile(cmd[2], os.O_RDWR|os.O_CREATE, 0777)
-		if err != nil {
-			return true, fmt.Errorf("failed to open output file: %v", err)
-		}
-		if err := pprof(f); err != nil {
-			f.Close()
-			return true, err
-		}
-		return true, f.Close()
+		return pprofCmd(cmd[1:], events, goroutines)
+	case ":goroutine":
+		return goroutineCmd(cmd[1:], events, goroutines)
 	}
 	return false, nil
+}
+
+func pprofCmd(args []string, events []*trace.Event, goroutines map[uint64]*trace.GDesc) (handled bool, err error) {
+	if len(args) != 2 {
+		return true, fmt.Errorf("usage: :pprof [io|block|sched|syscall] output_fname")
+	}
+	var pprof func(w io.Writer) error
+	switch args[0] {
+	default:
+		return true, fmt.Errorf("usage: :pprof [io|block|sched|syscall] output_fname")
+	case "io":
+		pprof = analysis.IOProfile
+	case "block":
+		pprof = analysis.BlockProfile
+	case "sched":
+		pprof = analysis.ScheduleLatencyProfile
+	case "syscall":
+		pprof = analysis.SyscallProfile
+	}
+	f, err := os.OpenFile(args[1], os.O_RDWR|os.O_CREATE, 0777)
+	if err != nil {
+		return true, fmt.Errorf("failed to open output file: %v", err)
+	}
+	if err := pprof(f); err != nil {
+		f.Close()
+		return true, err
+	}
+	return true, f.Close()
+}
+
+func goroutineCmd(args []string, events []*trace.Event, goroutines map[uint64]*trace.GDesc) (handled bool, err error) {
+	for _, id := range args {
+		goid, err := strconv.ParseUint(id, 10, 64)
+		if err != nil {
+			return true, fmt.Errorf("usage: :goroutine [id1] [id2] ...")
+		}
+		if g, ok := goroutines[goid]; !ok {
+			fmt.Printf("%d\t<goroutine not found>\n", goid)
+		} else {
+			fmt.Printf("%v\n", g)
+		}
+	}
+	return true, nil
 }

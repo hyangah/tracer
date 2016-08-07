@@ -4,6 +4,12 @@
 
 package trace
 
+import (
+	"bytes"
+	"fmt"
+	"time"
+)
+
 // GDesc contains statistics about execution of a single goroutine.
 type GDesc struct {
 	ID           uint64
@@ -23,6 +29,20 @@ type GDesc struct {
 	TotalTime     int64
 
 	*gdesc // private part
+}
+
+func dur(nsec int64) time.Duration {
+	return time.Duration(nsec)
+}
+
+func (gd *GDesc) String() string {
+	buf := new(bytes.Buffer)
+	fmt.Fprintf(buf, "%d\t%s pc=%d creation=%d start=%d end=%d exec=%v sched_wait=%v io=%v block=%v sys=%v gc=%v sweep=%v total=%v\n",
+		gd.ID, gd.Name, gd.PC, gd.CreationTime, gd.StartTime, gd.EndTime,
+		dur(gd.ExecTime), dur(gd.SchedWaitTime), dur(gd.IOTime),
+		dur(gd.BlockTime), dur(gd.SyscallTime), dur(gd.GCTime),
+		dur(gd.SweepTime), dur(gd.TotalTime))
+	return buf.String()
 }
 
 // gdesc is a private part of GDesc that is required only during analysis.

@@ -5,11 +5,11 @@
 package trace
 
 import (
-	"log"
 	"bufio"
 	"bytes"
 	"fmt"
 	"io"
+	"log"
 	"math/rand"
 	"os"
 	"os/exec"
@@ -41,6 +41,30 @@ type Event struct {
 	// for blocking GoSysCall: the associated GoSysExit
 	// for GoSysExit: the next GoStart
 	Link *Event
+}
+
+func (ev *Event) String() string {
+	buf := new(bytes.Buffer)
+	ev.desc(buf)
+	return buf.String()
+}
+
+func (ev *Event) desc(w io.Writer) {
+	desc := EventDescriptions[ev.Type]
+	fmt.Fprintf(w, "%v %v p=%v g=%v off=%v", ev.Ts, desc.Name, ev.P, ev.G, ev.Off)
+	for i, a := range desc.Args {
+		fmt.Fprintf(w, " %v=%v", a, ev.Args[i])
+	}
+}
+
+func (ev *Event) DebugString() string {
+	buf := new(bytes.Buffer)
+	ev.desc(buf)
+	buf.Write([]byte{'\n'})
+	for _, f := range ev.Stk {
+		fmt.Fprintf(buf, "\t%s\t%s:%d\n", f.Fn, f.File, f.Line)
+	}
+	return buf.String()
 }
 
 // Frame is a frame in stack traces.
@@ -776,7 +800,6 @@ func (s addr2LineSymbolizer) Symbolize(pcs []uint64) (map[uint64]*Frame, error) 
 	return ret, nil
 }
 
-
 // symbolize attaches func/file/line info to stack traces.
 func symbolize(events []*Event, s Symbolizer) error {
 	// First, collect and dedup all pcs.
@@ -828,18 +851,8 @@ func readVal(r io.Reader, off0 int) (v uint64, off int, err error) {
 // Print dumps events to stdout. For debugging.
 func Print(events []*Event) {
 	for _, ev := range events {
-		PrintEvent(ev)
+		fmt.Printf("%v\n", ev)
 	}
-}
-
-// PrintEvent dumps the event to stdout. For debugging.
-func PrintEvent(ev *Event) {
-	desc := EventDescriptions[ev.Type]
-	fmt.Printf("%v %v p=%v g=%v off=%v", ev.Ts, desc.Name, ev.P, ev.G, ev.Off)
-	for i, a := range desc.Args {
-		fmt.Printf(" %v=%v", a, ev.Args[i])
-	}
-	fmt.Printf("\n")
 }
 
 // argNum returns total number of args for the event accounting for timestamps,
