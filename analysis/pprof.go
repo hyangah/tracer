@@ -93,6 +93,9 @@ func ScheduleLatencyProfile(w io.Writer) error {
 			ev.Link == nil || ev.StkID == 0 || len(ev.Stk) == 0 {
 			continue
 		}
+		if ev.Type == trace.EvGoCreate && ev.G == 0 { // Fake EvGoCreate event added when starting trace.
+			continue
+		}
 		rec := prof[ev.StkID]
 		rec.stk = ev.Stk
 		rec.n++
